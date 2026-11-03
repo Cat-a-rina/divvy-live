@@ -57,3 +57,60 @@ export function computeChangedRows(
       updated_at: now().toISOString(),
     }));
 }
+
+export type DivvyStationInfo = {
+  station_id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  capacity: number;
+};
+
+export type StoredStationInfo = {
+  station_id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  capacity: number;
+};
+
+// Lat/lon round-trip through JSON <-> Postgres double precision can shift by
+// a tiny amount (around the 13th decimal digit) with no real-world meaning —
+// comparing floats with exact equality would flag that as "changed" forever.
+const COORDINATE_TOLERANCE_DEGREES = 1e-7; // ~1cm at the equator
+
+function coordinatesDiffer(a: number, b: number): boolean {
+  return Math.abs(a - b) > COORDINATE_TOLERANCE_DEGREES;
+}
+
+export function hasInfoChanged(
+  divvy: DivvyStationInfo,
+  stored: StoredStationInfo | undefined,
+): boolean {
+  if (!stored) return true;
+  return (
+    divvy.name !== stored.name ||
+    coordinatesDiffer(divvy.lat, stored.lat) ||
+    coordinatesDiffer(divvy.lon, stored.lon) ||
+    divvy.capacity !== stored.capacity
+  );
+}
+
+export function computeChangedStationInfoRows(
+  stations: DivvyStationInfo[],
+  existingRows: StoredStationInfo[],
+  now: () => Date = () => new Date(),
+): (StoredStationInfo & { updated_at: string })[] {
+  const existingById = new Map(existingRows.map((row) => [row.station_id, row]));
+
+  return stations
+    .filter((s) => hasInfoChanged(s, existingById.get(s.station_id)))
+    .map((s) => ({
+      station_id: s.station_id,
+      name: s.name,
+      lat: s.lat,
+      lon: s.lon,
+      capacity: s.capacity,
+      updated_at: now().toISOString(),
+    }));
+}

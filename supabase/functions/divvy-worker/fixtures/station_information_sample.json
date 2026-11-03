@@ -1,0 +1,29 @@
+{
+  "last_updated": 1700000000,
+  "ttl": 3600,
+  "data": {
+    "stations": [
+      {
+        "station_id": "new-station",
+        "name": "New Station Ave",
+        "lat": 41.88,
+        "lon": -87.63,
+        "capacity": 15
+      },
+      {
+        "station_id": "unchanged-station",
+        "name": "Unchanged St",
+        "lat": 41.89,
+        "lon": -87.62,
+        "capacity": 12
+      },
+      {
+        "station_id": "renamed-station",
+        "name": "New Name Plaza",
+        "lat": 41.90,
+        "lon": -87.61,
+        "capacity": 20
+      }
+    ]
+  }
+}
