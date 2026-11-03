@@ -1,0 +1,48 @@
+{
+  "last_updated": 1700000000,
+  "ttl": 60,
+  "data": {
+    "stations": [
+      {
+        "station_id": "new-station",
+        "num_bikes_available": 5,
+        "num_ebikes_available": 1,
+        "num_scooters_available": 0,
+        "num_docks_available": 10,
+        "is_renting": 1,
+        "is_returning": 1,
+        "last_reported": 1700000000
+      },
+      {
+        "station_id": "unchanged-station",
+        "num_bikes_available": 3,
+        "num_ebikes_available": 0,
+        "num_scooters_available": 0,
+        "num_docks_available": 7,
+        "is_renting": 1,
+        "is_returning": 1,
+        "last_reported": 1700000000
+      },
+      {
+        "station_id": "changed-station",
+        "num_bikes_available": 2,
+        "num_ebikes_available": 0,
+        "num_scooters_available": 0,
+        "num_docks_available": 8,
+        "is_renting": 1,
+        "is_returning": 1,
+        "last_reported": 1700000000
+      },
+      {
+        "station_id": "null-scooters-station",
+        "num_bikes_available": 0,
+        "num_ebikes_available": 0,
+        "num_scooters_available": null,
+        "num_docks_available": 13,
+        "is_renting": 1,
+        "is_returning": 1,
+        "last_reported": 1700000000
+      }
+    ]
+  }
+}
