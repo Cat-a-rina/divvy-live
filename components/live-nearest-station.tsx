@@ -3,11 +3,13 @@
 import { followStation, unfollowStation } from "@/app/actions/follows";
 import { saveRoute } from "@/app/actions/routes";
 import { LiveStationMap } from "@/components/live-station-map";
+import { StationSelect } from "@/components/station-select";
 import { distanceMeters } from "@/lib/divvy/distance";
+import type { LiveStation } from "@/lib/supabase/useLiveStations";
 import { useFollowedStationIds } from "@/lib/supabase/useFollowedStationIds";
 import { useLiveStations } from "@/lib/supabase/useLiveStations";
 import { useWorkerFreshness } from "@/lib/supabase/useWorkerFreshness";
-import { useAuth } from "@clerk/nextjs";
+import { SignUpButton, useAuth } from "@clerk/nextjs";
 import {
   Bike,
   Heart,
@@ -15,9 +17,9 @@ import {
   Map as MapIcon,
   Scooter,
   SquareParking,
+  X,
   Zap,
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 const FRESHNESS_LABEL: Record<string, string> = {
@@ -44,30 +46,29 @@ export function LiveNearestStation() {
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [originId, setOriginId] = useState("");
-  const [destinationId, setDestinationId] = useState("");
+  const [waypointIds, setWaypointIds] = useState<string[]>([""]);
   const [showMap, setShowMap] = useState(false);
   const [isFollowPending, startFollowTransition] = useTransition();
   const [isSavePending, startSaveTransition] = useTransition();
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
-  const [flashId, setFlashId] = useState<string | null>(null);
-  const [, forceTick] = useState(0);
+  // Reading the clock has to happen as state, not a bare Date.now() call
+  // during render — render must stay pure, so "now" is only ever updated
+  // from inside an effect/interval, never read live off the wall clock.
+  const [now, setNow] = useState(() => Date.now());
   const autoOriginSet = useRef(false);
+
+  // Tick once a second so "N seconds ago" and the flash below stay accurate.
+  useEffect(() => {
+    if (!lastUpdate) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [lastUpdate]);
 
   // Briefly highlight whichever dot just changed, so a real-time update is
   // something you can actually see happen, not just infer from a number.
-  useEffect(() => {
-    if (!lastUpdate) return;
-    setFlashId(lastUpdate.stationId);
-    const timer = setTimeout(() => setFlashId(null), 1200);
-    return () => clearTimeout(timer);
-  }, [lastUpdate]);
-
-  // Re-render once a second so "N seconds ago" below stays accurate.
-  useEffect(() => {
-    if (!lastUpdate) return;
-    const interval = setInterval(() => forceTick((n) => n + 1), 1000);
-    return () => clearInterval(interval);
-  }, [lastUpdate]);
+  // Derived rather than its own state+effect, since it's fully determined
+  // by values we already have.
+  const flashId = lastUpdate && now - lastUpdate.at < 1200 ? lastUpdate.stationId : null;
 
   function findMyLocation() {
     if (!navigator.geolocation) {
@@ -123,35 +124,79 @@ export function LiveNearestStation() {
     return sorted;
   }, [stations, coords]);
 
-  const destinationOptions = useMemo(() => {
-    const candidates = stations.filter((s) => s.stationId !== originId);
-    if (originStation) {
+  // Waypoints are kept as an ordered list of slots (some possibly still
+  // empty while being picked); only the filled-in ones form the real route.
+  const validWaypointIds = waypointIds.filter((id): id is string => Boolean(id));
+  const waypointStations = validWaypointIds
+    .map((id) => stations.find((s) => s.stationId === id))
+    .filter((s): s is LiveStation => Boolean(s));
+  const finalDestinationId = waypointStations.at(-1)?.stationId ?? "";
+
+  const totalRouteDistance = (() => {
+    if (!originStation || waypointStations.length === 0) return null;
+    const chain = [originStation, ...waypointStations];
+    let total = 0;
+    for (let i = 0; i < chain.length - 1; i++) {
+      total += distanceMeters(chain[i], chain[i + 1]);
+    }
+    return total;
+  })();
+
+  function optionsForWaypoint(index: number): LiveStation[] {
+    const referenceStation = index === 0
+      ? originStation
+      : stations.find((s) => s.stationId === waypointIds[index - 1]) ?? null;
+    const excludeIds = new Set(
+      [originId, ...waypointIds.filter((id, i) => i !== index)].filter(Boolean),
+    );
+    const candidates = stations.filter((s) => !excludeIds.has(s.stationId));
+    if (referenceStation) {
       candidates.sort(
-        (a, b) => distanceMeters(originStation, a) - distanceMeters(originStation, b),
+        (a, b) => distanceMeters(referenceStation, a) - distanceMeters(referenceStation, b),
       );
     } else {
       candidates.sort((a, b) => a.name.localeCompare(b.name));
     }
     return candidates;
-  }, [stations, originId, originStation]);
+  }
+
+  function updateWaypoint(index: number, stationId: string) {
+    setWaypointIds((prev) => prev.map((id, i) => (i === index ? stationId : id)));
+  }
+
+  function addWaypoint() {
+    setWaypointIds((prev) => [...prev, ""]);
+  }
+
+  function removeWaypoint(index: number) {
+    setWaypointIds((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+  }
 
   // The map only ever shows a nearby cluster around the origin — plotting
   // all ~2000 stations in a small canvas is an unreadable blob with no
-  // sense of scale. Always include the chosen destination even if it falls
-  // outside that nearby radius, so a selection never just disappears.
+  // sense of scale. Always include chosen stops even if they fall outside
+  // that nearby radius, so a selection never just disappears.
   const NEARBY_COUNT = 40;
+  const validWaypointKey = validWaypointIds.join(",");
   const nearbyStations = useMemo(() => {
     if (!originStation) return [];
     const sorted = [...stations].sort(
       (a, b) => distanceMeters(originStation, a) - distanceMeters(originStation, b),
     );
     const nearest = sorted.slice(0, NEARBY_COUNT);
-    if (destinationId && !nearest.some((s) => s.stationId === destinationId)) {
-      const destination = stations.find((s) => s.stationId === destinationId);
-      if (destination) nearest.push(destination);
+    const nearestIds = new Set(nearest.map((s) => s.stationId));
+    for (const id of validWaypointIds) {
+      if (!nearestIds.has(id)) {
+        const station = stations.find((s) => s.stationId === id);
+        if (station) {
+          nearest.push(station);
+          nearestIds.add(id);
+        }
+      }
     }
     return nearest;
-  }, [stations, originStation, destinationId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stations, originStation, validWaypointKey]);
 
   // Only the most recent change per station, and only for stations in the
   // nearby area shown above — a global feed would mostly show changes from
@@ -184,10 +229,13 @@ export function LiveNearestStation() {
   }
 
   function submitSaveRoute() {
-    if (!originStation || !destinationId) return;
+    if (!originStation || waypointStations.length === 0) return;
+    const destination = waypointStations.at(-1)!;
+    const stops = waypointStations.slice(0, -1).map((s) => s.stationId);
     const formData = new FormData();
     formData.set("originStationId", originStation.stationId);
-    formData.set("destinationStationId", destinationId);
+    formData.set("destinationStationId", destination.stationId);
+    formData.set("stops", JSON.stringify(stops));
     startSaveTransition(async () => {
       await saveRoute(formData);
       setSaveMessage("Route saved.");
@@ -216,7 +264,7 @@ export function LiveNearestStation() {
           </p>
           <ul className="flex flex-col gap-1" aria-live="polite">
             {nearbyActivity.map((entry) => {
-              const secondsAgo = Math.max(0, Math.round((Date.now() - entry.at) / 1000));
+              const secondsAgo = Math.max(0, Math.round((now - entry.at) / 1000));
               const justUpdated = secondsAgo < 3;
               return (
                 <li
@@ -256,41 +304,18 @@ export function LiveNearestStation() {
         )}
         {locationError && <p className="text-sm text-[#0a1f3d]/60">{locationError}</p>}
 
-        <label className="flex flex-col gap-1 text-sm font-medium">
-          {coords ? "Or choose a different station" : "Station"}
-          <select
+        <div className="flex items-center justify-between gap-3">
+          <StationSelect
+            ariaLabel="Choose a station"
             value={originId}
-            onChange={(event) => setOriginId(event.target.value)}
+            onChange={setOriginId}
             disabled={stationsLoading || stations.length === 0}
-            className="rounded border border-divvy-blue/30 px-3 py-2 focus:border-divvy-blue focus:outline-none"
-          >
-            <option value="" disabled>
-              Select a station
-            </option>
-            {originOptions.map((station) => (
-              <option key={station.stationId} value={station.stationId}>
-                {station.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {distanceToOrigin !== null && (
-          <p className="text-sm text-[#0a1f3d]/60">
-            {(distanceToOrigin / 1000).toFixed(2)} km away
-          </p>
-        )}
-      </div>
+            options={originOptions.map((s) => ({ id: s.stationId, label: s.name }))}
+            className="flex-1"
+          />
 
-      {coords && stationsLoading && (
-        <p className="mt-3 text-sm text-[#0a1f3d]/60">Loading station data…</p>
-      )}
-
-      {originStation && (
-        <div className="mt-4 flex flex-col gap-4">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-lg font-semibold">{originStation.name}</p>
-
-            {isSignedIn ? (
+          {originStation && (
+            isSignedIn ? (
               <button
                 type="button"
                 disabled={isFollowPending}
@@ -306,15 +331,31 @@ export function LiveNearestStation() {
                 {isFollowing ? "Following" : "Follow"}
               </button>
             ) : (
-              <Link
-                href="/sign-up"
-                className="font-heading shrink-0 rounded-full border border-divvy-blue px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-divvy-blue hover:bg-divvy-blue-light"
-              >
-                Sign up to follow
-              </Link>
-            )}
-          </div>
+              <SignUpButton mode="modal">
+                <button
+                  type="button"
+                  className="font-heading shrink-0 rounded-full border border-divvy-blue px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-divvy-blue hover:bg-divvy-blue-light"
+                >
+                  Sign up to follow
+                </button>
+              </SignUpButton>
+            )
+          )}
+        </div>
 
+        {distanceToOrigin !== null && (
+          <p className="text-sm text-[#0a1f3d]/60">
+            {(distanceToOrigin / 1000).toFixed(2)} km away
+          </p>
+        )}
+      </div>
+
+      {coords && stationsLoading && (
+        <p className="mt-3 text-sm text-[#0a1f3d]/60">Loading station data…</p>
+      )}
+
+      {originStation && (
+        <div className="mt-4 flex flex-col gap-4">
           {originStation.isRenting ? (
             <div className="flex flex-col gap-2">
               <div className="grid grid-cols-2 gap-3">
@@ -346,6 +387,12 @@ export function LiveNearestStation() {
                 </span>
                 <span aria-hidden="true">|</span>
                 <span className="flex items-center gap-1">
+                  <Bike aria-hidden="true" size={14} className="text-divvy-blue" />
+                  {Math.max(originStation.bikesAvailable - originStation.ebikesAvailable, 0)}{" "}
+                  classic
+                </span>
+                <span aria-hidden="true">|</span>
+                <span className="flex items-center gap-1">
                   <Scooter aria-hidden="true" size={14} className="text-divvy-amber" />
                   {originStation.scootersAvailable} scooter
                   {originStation.scootersAvailable === 1 ? "" : "s"}
@@ -371,7 +418,7 @@ export function LiveNearestStation() {
                   <LiveStationMap
                     stations={nearbyStations}
                     originId={originStation.stationId}
-                    destinationId={destinationId}
+                    destinationId={finalDestinationId}
                     userCoords={coords}
                     flashId={flashId}
                     onSelectStation={setOriginId}
@@ -381,7 +428,7 @@ export function LiveNearestStation() {
                 )}
                 <p className="mt-1 text-xs text-[#0a1f3d]/50">
                   Showing the {Math.min(NEARBY_COUNT, nearbyStations.length)} stations nearest
-                  your origin (blue) and destination (amber), if chosen. Dot size is bikes
+                  your origin (blue) and final stop (amber), if chosen. Dot size is bikes
                   available right now — watch one grow or shrink as the worker updates it.
                   Click a dot to plan from that station.
                 </p>
@@ -393,40 +440,62 @@ export function LiveNearestStation() {
             <p className="font-heading text-sm font-bold uppercase tracking-wide text-divvy-blue">
               Plan a route from here
             </p>
-            <label className="flex flex-col gap-1 text-sm font-medium">
-              Destination station
-              <select
-                value={destinationId}
-                onChange={(event) => setDestinationId(event.target.value)}
-                className="rounded border border-divvy-blue/30 px-3 py-2 focus:border-divvy-blue focus:outline-none"
-              >
-                <option value="" disabled>
-                  Select a station
-                </option>
-                {destinationOptions.map((station) => (
-                  <option key={station.stationId} value={station.stationId}>
-                    {station.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+
+            {waypointIds.map((waypointId, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <StationSelect
+                  ariaLabel={index === 0 ? "Destination station" : `Stop ${index + 1}`}
+                  value={waypointId}
+                  onChange={(id) => updateWaypoint(index, id)}
+                  options={optionsForWaypoint(index).map((s) => ({ id: s.stationId, label: s.name }))}
+                  className="flex-1"
+                />
+                {waypointIds.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeWaypoint(index)}
+                    aria-label={`Remove stop ${index + 1}`}
+                    className="shrink-0 text-[#0a1f3d]/50 hover:text-[#0a1f3d]"
+                  >
+                    <X aria-hidden="true" size={16} />
+                  </button>
+                )}
+              </div>
+            ))}
+
+            <button
+              type="button"
+              onClick={addWaypoint}
+              className="font-heading self-start text-xs font-semibold uppercase tracking-wide text-divvy-blue hover:underline"
+            >
+              + Add another stop
+            </button>
+
+            {totalRouteDistance !== null && (
+              <p className="text-sm text-[#0a1f3d]/60">
+                Total: {(totalRouteDistance / 1000).toFixed(2)} km across{" "}
+                {waypointStations.length + 1} stations (straight-line estimate)
+              </p>
+            )}
 
             {isSignedIn ? (
               <button
                 type="button"
                 onClick={submitSaveRoute}
-                disabled={!destinationId || isSavePending}
+                disabled={waypointStations.length === 0 || isSavePending}
                 className="font-heading mt-1 self-start rounded-full bg-divvy-blue px-5 py-2 text-sm font-bold uppercase tracking-wide text-white transition-colors hover:bg-divvy-blue-dark disabled:opacity-50"
               >
                 {isSavePending ? "Saving…" : "Save route"}
               </button>
             ) : (
-              <Link
-                href="/sign-up"
-                className="font-heading mt-1 self-start rounded-full border border-divvy-blue px-5 py-2 text-sm font-bold uppercase tracking-wide text-divvy-blue hover:bg-divvy-blue-light"
-              >
-                Sign up to save this route
-              </Link>
+              <SignUpButton mode="modal">
+                <button
+                  type="button"
+                  className="font-heading mt-1 self-start rounded-full border border-divvy-blue px-5 py-2 text-sm font-bold uppercase tracking-wide text-divvy-blue hover:bg-divvy-blue-light"
+                >
+                  Sign up to save this route
+                </button>
+              </SignUpButton>
             )}
 
             {saveMessage && (

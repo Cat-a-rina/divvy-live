@@ -101,7 +101,9 @@ export function useLiveStations() {
   // "what was this station's value right before this update," so track that
   // separately in a ref instead of relying on the stale closure.
   const stationsRef = useRef(stations);
-  stationsRef.current = stations;
+  useEffect(() => {
+    stationsRef.current = stations;
+  }, [stations]);
 
   useEffect(() => {
     let cancelled = false;

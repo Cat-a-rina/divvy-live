@@ -1,5 +1,5 @@
 import { LiveNearestStation } from "@/components/live-nearest-station";
-import { UserButton } from "@clerk/nextjs";
+import { SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { Bike, Leaf } from "lucide-react";
 import Link from "next/link";
@@ -30,15 +30,19 @@ export default async function LandingPage() {
           </div>
         ) : (
           <div className="flex items-center gap-3 text-sm font-semibold uppercase tracking-wide">
-            <Link href="/sign-in" className="hover:underline">
-              Sign in
-            </Link>
-            <Link
-              href="/sign-up"
-              className="rounded-full bg-white px-4 py-1.5 text-divvy-blue hover:bg-white/90"
-            >
-              Sign up
-            </Link>
+            <SignInButton mode="modal">
+              <button type="button" className="hover:underline">
+                Sign in
+              </button>
+            </SignInButton>
+            <SignUpButton mode="modal">
+              <button
+                type="button"
+                className="rounded-full bg-white px-4 py-1.5 text-divvy-blue hover:bg-white/90"
+              >
+                Sign up
+              </button>
+            </SignUpButton>
           </div>
         )}
       </header>

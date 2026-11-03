@@ -4,16 +4,15 @@ import { useAuth } from "@clerk/nextjs";
 import { useEffect, useState } from "react";
 import { useSupabaseClient } from "./client";
 
+const EMPTY_IDS = new Set<string>();
+
 export function useFollowedStationIds() {
   const { isSignedIn } = useAuth();
   const supabase = useSupabaseClient();
-  const [ids, setIds] = useState<Set<string>>(new Set());
+  const [fetchedIds, setFetchedIds] = useState<Set<string>>(EMPTY_IDS);
 
   useEffect(() => {
-    if (!isSignedIn) {
-      setIds(new Set());
-      return;
-    }
+    if (!isSignedIn) return;
 
     let cancelled = false;
     supabase
@@ -21,7 +20,7 @@ export function useFollowedStationIds() {
       .select("station_id")
       .then(({ data }) => {
         if (!cancelled && data) {
-          setIds(new Set(data.map((row) => row.station_id as string)));
+          setFetchedIds(new Set(data.map((row) => row.station_id as string)));
         }
       });
 
@@ -30,5 +29,7 @@ export function useFollowedStationIds() {
     };
   }, [isSignedIn, supabase]);
 
-  return ids;
+  // Don't render stale fetched ids once signed out — they just stay cached
+  // in state until a future sign-in refetches them.
+  return isSignedIn ? fetchedIds : EMPTY_IDS;
 }

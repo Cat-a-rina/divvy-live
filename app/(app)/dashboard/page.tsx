@@ -1,6 +1,6 @@
-import { NearestStationCard } from "@/components/nearest-station-card";
+import { LiveNearestStation } from "@/components/live-nearest-station";
 import { getStations } from "@/lib/divvy/gbfs";
-import { getFavoriteStations, getSavedRoutes } from "@/lib/supabase/queries";
+import { getSavedRoutes } from "@/lib/supabase/queries";
 import { currentUser } from "@clerk/nextjs/server";
 import { Route as RouteIcon } from "lucide-react";
 import Link from "next/link";
@@ -18,11 +18,7 @@ export default async function DashboardPage() {
   const displayName =
     (user.publicMetadata.displayName as string | undefined) || user.firstName;
 
-  const [stations, favorites, savedRoutes] = await Promise.all([
-    getStations(),
-    getFavoriteStations(),
-    getSavedRoutes(),
-  ]);
+  const [stations, savedRoutes] = await Promise.all([getStations(), getSavedRoutes()]);
 
   const stationNameById = new Map(
     stations.map((station) => [station.stationId, station.name]),
@@ -34,10 +30,7 @@ export default async function DashboardPage() {
         Welcome back{displayName ? `, ${displayName}` : ""}
       </p>
 
-      <NearestStationCard
-        stations={stations}
-        favoriteStationIds={favorites.map((f) => f.station_id)}
-      />
+      <LiveNearestStation />
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
