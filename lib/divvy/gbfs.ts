@@ -1,12 +1,7 @@
-import { cacheLife } from "next/cache";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { Station } from "./types";
 
-const STATION_INFORMATION_URL =
-  "https://gbfs.divvybikes.com/gbfs/en/station_information.json";
-const STATION_STATUS_URL =
-  "https://gbfs.divvybikes.com/gbfs/en/station_status.json";
-
-type RawStationInformation = {
+type StationInfoRow = {
   station_id: string;
   name: string;
   lat: number;
@@ -14,82 +9,67 @@ type RawStationInformation = {
   capacity: number;
 };
 
-type RawStationStatus = {
+type StationStatusRow = {
   station_id: string;
   num_bikes_available: number;
   num_ebikes_available: number;
   num_scooters_available: number;
   num_docks_available: number;
-  is_renting: number;
-  is_returning: number;
-  last_reported: number;
+  is_renting: boolean;
+  is_returning: boolean;
+  last_reported: string;
 };
 
-async function getStationInformation(): Promise<
-  Map<string, RawStationInformation>
-> {
-  "use cache";
-  cacheLife("hours");
-
-  const res = await fetch(STATION_INFORMATION_URL);
-  if (!res.ok) {
-    throw new Error(`Divvy station_information request failed: ${res.status}`);
+// Supabase's REST API caps a single request at 1000 rows no matter what you
+// ask for — paginate, or ~half the stations silently vanish from the result.
+async function fetchAllRows<T>(table: string): Promise<T[]> {
+  const supabase = await createSupabaseServerClient();
+  const pageSize = 1000;
+  const rows: T[] = [];
+  let offset = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    rows.push(...(data as T[]));
+    if (data.length < pageSize) break;
+    offset += pageSize;
   }
-  const body = (await res.json()) as {
-    data: { stations: RawStationInformation[] };
-  };
-
-  return new Map(body.data.stations.map((station) => [station.station_id, station]));
+  return rows;
 }
 
-// Divvy's own feed declares a 60s TTL (ttl field in station_status.json) —
-// cache no longer than that, since the "minutes" preset's 1-hour expire let
-// bike/dock counts go stale far longer than this data is actually live for.
-const LIVE_STATUS_CACHE_LIFE = { stale: 30, revalidate: 30, expire: 120 };
-
-async function getStationStatus(): Promise<Map<string, RawStationStatus>> {
-  "use cache";
-  cacheLife(LIVE_STATUS_CACHE_LIFE);
-
-  const res = await fetch(STATION_STATUS_URL);
-  if (!res.ok) {
-    throw new Error(`Divvy station_status request failed: ${res.status}`);
-  }
-  const body = (await res.json()) as {
-    data: { stations: RawStationStatus[] };
-  };
-
-  return new Map(body.data.stations.map((station) => [station.station_id, station]));
-}
-
+// Every station's live data comes from our own database, kept current by
+// the divvy-worker Edge Function on a schedule — nothing in this app calls
+// Divvy's API directly. That's the worker's job alone.
 export async function getStations(): Promise<Station[]> {
-  "use cache";
-  cacheLife(LIVE_STATUS_CACHE_LIFE);
-
-  const [information, status] = await Promise.all([
-    getStationInformation(),
-    getStationStatus(),
+  const [info, status] = await Promise.all([
+    fetchAllRows<StationInfoRow>("stations"),
+    fetchAllRows<StationStatusRow>("station_status_live"),
   ]);
 
+  const statusById = new Map(status.map((row) => [row.station_id, row]));
   const stations: Station[] = [];
 
-  for (const [stationId, info] of information) {
-    const stationStatus = status.get(stationId);
-    if (!stationStatus) continue;
+  for (const row of info) {
+    const s = statusById.get(row.station_id);
+    if (!s) continue;
 
     stations.push({
-      stationId,
-      name: info.name,
-      lat: info.lat,
-      lon: info.lon,
-      capacity: info.capacity,
-      bikesAvailable: stationStatus.num_bikes_available,
-      ebikesAvailable: stationStatus.num_ebikes_available,
-      scootersAvailable: stationStatus.num_scooters_available,
-      docksAvailable: stationStatus.num_docks_available,
-      isRenting: stationStatus.is_renting === 1,
-      isReturning: stationStatus.is_returning === 1,
-      lastReported: stationStatus.last_reported,
+      stationId: row.station_id,
+      name: row.name,
+      lat: row.lat,
+      lon: row.lon,
+      capacity: row.capacity,
+      bikesAvailable: s.num_bikes_available,
+      ebikesAvailable: s.num_ebikes_available,
+      scootersAvailable: s.num_scooters_available,
+      docksAvailable: s.num_docks_available,
+      isRenting: s.is_renting,
+      isReturning: s.is_returning,
+      lastReported: Math.floor(new Date(s.last_reported).getTime() / 1000),
     });
   }
 

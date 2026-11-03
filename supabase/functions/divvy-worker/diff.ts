@@ -114,3 +114,54 @@ export function computeChangedStationInfoRows(
       updated_at: now().toISOString(),
     }));
 }
+
+export type DivvyPricingPlan = {
+  plan_id: string;
+  price: string;
+  description: string;
+};
+
+export type StoredPricingPlan = {
+  plan_id: string;
+  unlock_fee: number;
+  per_minute_rate: number;
+};
+
+const PRICING_TOLERANCE = 1e-6;
+
+function pricingDiffers(a: number, b: number): boolean {
+  return Math.abs(a - b) > PRICING_TOLERANCE;
+}
+
+function parsePerMinuteRate(description: string): number {
+  const match = description.match(/\$([\d.]+) per minute/);
+  return match ? Number.parseFloat(match[1]) : 0;
+}
+
+export function hasPricingChanged(
+  divvy: StoredPricingPlan,
+  stored: StoredPricingPlan | undefined,
+): boolean {
+  if (!stored) return true;
+  return (
+    pricingDiffers(divvy.unlock_fee, stored.unlock_fee) ||
+    pricingDiffers(divvy.per_minute_rate, stored.per_minute_rate)
+  );
+}
+
+export function computeChangedPricingRows(
+  plans: DivvyPricingPlan[],
+  existingRows: StoredPricingPlan[],
+  now: () => Date = () => new Date(),
+): (StoredPricingPlan & { updated_at: string })[] {
+  const parsed = plans.map((plan) => ({
+    plan_id: plan.plan_id,
+    unlock_fee: Number.parseFloat(plan.price),
+    per_minute_rate: parsePerMinuteRate(plan.description),
+  }));
+  const existingById = new Map(existingRows.map((row) => [row.plan_id, row]));
+
+  return parsed
+    .filter((plan) => hasPricingChanged(plan, existingById.get(plan.plan_id)))
+    .map((plan) => ({ ...plan, updated_at: now().toISOString() }));
+}

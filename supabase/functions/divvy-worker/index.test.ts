@@ -2,10 +2,13 @@ import { assertEquals } from "jsr:@std/assert@1";
 import sample from "./fixtures/station_status_sample.json" with { type: "json" };
 import infoSample from "./fixtures/station_information_sample.json" with { type: "json" };
 import {
+  computeChangedPricingRows,
   computeChangedRows,
   computeChangedStationInfoRows,
+  type DivvyPricingPlan,
   type DivvyStation,
   type DivvyStationInfo,
+  type StoredPricingPlan,
   type StoredStation,
   type StoredStationInfo,
 } from "./diff.ts";
@@ -95,4 +98,34 @@ Deno.test("station info: a sub-centimeter lat/lon float round-trip difference is
   };
   const changed = computeChangedStationInfoRows([divvyStation], [stored], FIXED_NOW);
   assertEquals(changed.length, 0);
+});
+
+const pricingPlans: DivvyPricingPlan[] = [
+  { plan_id: "BIKE_SINGLE_RIDE", price: "1.00", description: "$0.18 per minute" },
+  { plan_id: "EBIKE_SINGLE_RIDE", price: "1.00", description: "$0.42 per minute" },
+];
+
+Deno.test("pricing: parses price and per-minute rate out of the raw plan", () => {
+  const changed = computeChangedPricingRows(pricingPlans, [], FIXED_NOW);
+  const bike = changed.find((p) => p.plan_id === "BIKE_SINGLE_RIDE");
+  assertEquals(bike?.unlock_fee, 1.0);
+  assertEquals(bike?.per_minute_rate, 0.18);
+});
+
+Deno.test("pricing: never re-writes an unchanged plan", () => {
+  const existing: StoredPricingPlan[] = [
+    { plan_id: "BIKE_SINGLE_RIDE", unlock_fee: 1.0, per_minute_rate: 0.18 },
+    { plan_id: "EBIKE_SINGLE_RIDE", unlock_fee: 1.0, per_minute_rate: 0.42 },
+  ];
+  const changed = computeChangedPricingRows(pricingPlans, existing, FIXED_NOW);
+  assertEquals(changed.length, 0);
+});
+
+Deno.test("pricing: a real rate change is picked up", () => {
+  const existing: StoredPricingPlan[] = [
+    { plan_id: "BIKE_SINGLE_RIDE", unlock_fee: 1.0, per_minute_rate: 0.15 },
+    { plan_id: "EBIKE_SINGLE_RIDE", unlock_fee: 1.0, per_minute_rate: 0.42 },
+  ];
+  const changed = computeChangedPricingRows(pricingPlans, existing, FIXED_NOW);
+  assertEquals(changed.map((p) => p.plan_id), ["BIKE_SINGLE_RIDE"]);
 });

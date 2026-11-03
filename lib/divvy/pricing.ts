@@ -1,7 +1,4 @@
-import { cacheLife } from "next/cache";
-
-const SYSTEM_PRICING_PLANS_URL =
-  "https://gbfs.divvybikes.com/gbfs/en/system_pricing_plans.json";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type VehicleType = "classic" | "ebike" | "scooter";
 
@@ -10,35 +7,27 @@ export type PricingPlan = {
   perMinuteRate: number;
 };
 
-type RawPricingPlan = {
+type PricingPlanRow = {
   plan_id: string;
-  price: string;
-  description: string;
+  unlock_fee: number;
+  per_minute_rate: number;
 };
 
-function parsePerMinuteRate(description: string): number {
-  const match = description.match(/\$([\d.]+) per minute/);
-  return match ? Number.parseFloat(match[1]) : 0;
-}
-
+// Pricing comes from our own database, kept current by the divvy-worker Edge
+// Function — nothing in this app calls Divvy's API directly.
 export async function getPricingPlans(): Promise<
   Record<VehicleType, PricingPlan>
 > {
-  "use cache";
-  cacheLife("hours");
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.from("pricing_plans").select("*");
+  if (error) throw error;
 
-  const res = await fetch(SYSTEM_PRICING_PLANS_URL);
-  if (!res.ok) {
-    throw new Error(`Divvy system_pricing_plans request failed: ${res.status}`);
-  }
-  const body = (await res.json()) as { data: { plans: RawPricingPlan[] } };
-
-  const byId = new Map(body.data.plans.map((plan) => [plan.plan_id, plan]));
+  const byId = new Map((data as PricingPlanRow[]).map((plan) => [plan.plan_id, plan]));
   const planFor = (planId: string): PricingPlan => {
     const plan = byId.get(planId);
     return {
-      unlockFee: plan ? Number.parseFloat(plan.price) : 0,
-      perMinuteRate: plan ? parsePerMinuteRate(plan.description) : 0,
+      unlockFee: plan?.unlock_fee ?? 0,
+      perMinuteRate: plan?.per_minute_rate ?? 0,
     };
   };
 
